@@ -1,5 +1,6 @@
 -- ============================================================
 -- CONTROLE DE PROCEDIMENTOS ADMINISTRATIVOS — Schema Supabase
+-- VERSÃO CORRIGIDA (fix do cast interval->int na view)
 -- Execute este SQL em: Supabase Dashboard → SQL Editor → Run
 -- ============================================================
 
@@ -10,13 +11,13 @@ create extension if not exists "pgcrypto";
 -- TABELA: admins (administradores do sistema)
 -- ============================================================
 create table if not exists admins (
-  id           uuid primary key default gen_random_uuid(),
-  email        text unique not null,
-  nome         text not null,
-  graduacao    text,
-  senha_hash   text not null,
-  ativo        boolean default true,
-  created_at   timestamptz default now(),
+  id uuid primary key default gen_random_uuid(),
+  email text unique not null,
+  nome text not null,
+  graduacao text,
+  senha_hash text not null,
+  ativo boolean default true,
+  created_at timestamptz default now(),
   ultimo_acesso timestamptz
 );
 
@@ -24,32 +25,32 @@ create table if not exists admins (
 -- TABELA: procedimento_tipos (tipos com prazos editáveis)
 -- ============================================================
 create table if not exists procedimento_tipos (
-  id                text primary key,
-  nome              text not null,
-  prazo_dias        int  not null,
-  prorrogacao_dias  int  not null default 0,
-  ordem             int  default 0
+  id text primary key,
+  nome text not null,
+  prazo_dias int not null,
+  prorrogacao_dias int not null default 0,
+  ordem int default 0
 );
 
 -- Carrega os 6 tipos previstos na legislação militar
 insert into procedimento_tipos (id, nome, prazo_dias, prorrogacao_dias, ordem) values
-  ('averiguacao',         'Averiguação',          30, 20, 1),
-  ('ipm',                 'IPM',                  40, 20, 2),
-  ('sindicancia',         'Sindicância',          30, 20, 3),
-  ('inquerito_tecnico',   'Inquérito Técnico',    15,  5, 4),
-  ('parecer_tecnico',     'Parecer Técnico',      15,  5, 5),
-  ('averiguacao_sumaria', 'Averiguação Sumária',  15,  0, 6)
+  ('averiguacao', 'Averiguação', 30, 20, 1),
+  ('ipm', 'IPM', 40, 20, 2),
+  ('sindicancia', 'Sindicância', 30, 20, 3),
+  ('inquerito_tecnico', 'Inquérito Técnico', 15, 5, 4),
+  ('parecer_tecnico', 'Parecer Técnico', 15, 5, 5),
+  ('averiguacao_sumaria', 'Averiguação Sumária', 15, 0, 6)
 on conflict (id) do nothing;
 
 -- ============================================================
 -- TABELA: encarregados
 -- ============================================================
 create table if not exists encarregados (
-  id         uuid primary key default gen_random_uuid(),
-  graduacao  text not null,
-  nome       text not null,
-  rg         text,
-  telefone   text,
+  id uuid primary key default gen_random_uuid(),
+  graduacao text not null,
+  nome text not null,
+  rg text,
+  telefone text,
   created_at timestamptz default now()
 );
 
@@ -57,30 +58,30 @@ create table if not exists encarregados (
 -- TABELA: procedimentos (núcleo do sistema)
 -- ============================================================
 create table if not exists procedimentos (
-  id                       uuid primary key default gen_random_uuid(),
-  numero                   text not null,
-  tipo_id                  text not null references procedimento_tipos(id),
-  encarregado_id           uuid references encarregados(id) on delete set null,
-  data_instauracao         date not null,
-  prazo_dias               int  not null,
-  prorrogacao_dias         int  default 0,
-  data_prorrogacao         date,
-  status                   text default 'andamento',
-  portaria_numero          text,
-  portaria_data            date,
-  objeto                   text,
-  observacoes              text,
-  data_conclusao           date,
-  desfecho                 text,
-  whatsapp_5d_enviado      boolean default false,
+  id uuid primary key default gen_random_uuid(),
+  numero text not null,
+  tipo_id text not null references procedimento_tipos(id),
+  encarregado_id uuid references encarregados(id) on delete set null,
+  data_instauracao date not null,
+  prazo_dias int not null,
+  prorrogacao_dias int default 0,
+  data_prorrogacao date,
+  status text default 'andamento',
+  portaria_numero text,
+  portaria_data date,
+  objeto text,
+  observacoes text,
+  data_conclusao date,
+  desfecho text,
+  whatsapp_5d_enviado boolean default false,
   whatsapp_vencido_enviado boolean default false,
-  created_at               timestamptz default now(),
-  updated_at               timestamptz default now(),
-  created_by               uuid references admins(id),
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  created_by uuid references admins(id),
   constraint chk_status check (status in ('andamento','sobrestado','concluido'))
 );
 
-create index if not exists idx_proced_status      on procedimentos(status);
+create index if not exists idx_proced_status on procedimentos(status);
 create index if not exists idx_proced_instauracao on procedimentos(data_instauracao);
 create index if not exists idx_proced_encarregado on procedimentos(encarregado_id);
 
@@ -88,12 +89,12 @@ create index if not exists idx_proced_encarregado on procedimentos(encarregado_i
 -- TABELA: historico_procedimento (auditoria de mudanças)
 -- ============================================================
 create table if not exists historico_procedimento (
-  id              bigint generated by default as identity primary key,
+  id bigint generated by default as identity primary key,
   procedimento_id uuid references procedimentos(id) on delete cascade,
-  admin_id        uuid references admins(id),
-  acao            text not null,
-  detalhes        text,
-  created_at      timestamptz default now()
+  admin_id uuid references admins(id),
+  acao text not null,
+  detalhes text,
+  created_at timestamptz default now()
 );
 
 create index if not exists idx_hist_proced on historico_procedimento(procedimento_id);
@@ -102,30 +103,30 @@ create index if not exists idx_hist_proced on historico_procedimento(procediment
 -- TABELA: notificacoes_log (registro de WhatsApps disparados)
 -- ============================================================
 create table if not exists notificacoes_log (
-  id              bigint generated by default as identity primary key,
+  id bigint generated by default as identity primary key,
   procedimento_id uuid references procedimentos(id) on delete cascade,
-  encarregado_id  uuid references encarregados(id) on delete set null,
-  telefone        text,
-  tipo            text,
-  status_envio    text,
-  resposta_api    jsonb,
-  created_at      timestamptz default now()
+  encarregado_id uuid references encarregados(id) on delete set null,
+  telefone text,
+  tipo text,
+  status_envio text,
+  resposta_api jsonb,
+  created_at timestamptz default now()
 );
 
 -- ============================================================
 -- RLS — desabilitado (auth feito na aplicação via tabela admins)
 -- ============================================================
-alter table admins                disable row level security;
-alter table procedimento_tipos    disable row level security;
-alter table encarregados          disable row level security;
-alter table procedimentos         disable row level security;
+alter table admins disable row level security;
+alter table procedimento_tipos disable row level security;
+alter table encarregados disable row level security;
+alter table procedimentos disable row level security;
 alter table historico_procedimento disable row level security;
-alter table notificacoes_log      disable row level security;
+alter table notificacoes_log disable row level security;
 
 -- ============================================================
 -- ADMIN INICIAL — TROQUE A SENHA APÓS O PRIMEIRO ACESSO!
 -- Email: admin@ajd.local
--- Senha: ajd@2026  (SHA-256 com salt = "AJD_2026_" + email)
+-- Senha: ajd@2026 (SHA-256 com salt = "AJD_2026_" + email)
 -- ============================================================
 insert into admins (email, nome, graduacao, senha_hash)
 values (
@@ -154,22 +155,25 @@ create trigger trg_proced_updated
 
 -- ============================================================
 -- VIEW: procedimentos_view (com cálculos de prazo)
+-- *** CORRIGIDA: usa aritmética de data (date + int = date,
+--     date - date = int) em vez de cast interval->int. ***
 -- ============================================================
 create or replace view procedimentos_view as
 select
   p.*,
-  t.nome  as tipo_nome,
+  t.nome as tipo_nome,
   e.graduacao || ' ' || e.nome as encarregado_label,
   e.telefone as encarregado_telefone,
   (p.data_instauracao
-     + (p.prazo_dias || ' days')::interval
-     + (coalesce(p.prorrogacao_dias,0) || ' days')::interval
-  )::date as data_limite,
-  (p.data_instauracao
-     + (p.prazo_dias || ' days')::interval
-     + (coalesce(p.prorrogacao_dias,0) || ' days')::interval
-     - current_date
-  )::int as dias_restantes
+    + p.prazo_dias
+    + coalesce(p.prorrogacao_dias, 0)
+  ) as data_limite,
+  (
+    (p.data_instauracao
+      + p.prazo_dias
+      + coalesce(p.prorrogacao_dias, 0)
+    ) - current_date
+  ) as dias_restantes
 from procedimentos p
 left join procedimento_tipos t on t.id = p.tipo_id
-left join encarregados       e on e.id = p.encarregado_id;
+left join encarregados e on e.id = p.encarregado_id;
