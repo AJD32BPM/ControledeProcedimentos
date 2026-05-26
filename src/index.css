@@ -1,0 +1,159 @@
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body { height: 100%; }
+
+body {
+  font-family: 'Inter', 'Segoe UI', Tahoma, sans-serif;
+  font-size: 14px;
+  color: #e2e8f0;
+  background: #070f1e;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root { min-height: 100vh; }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #0d1a2e; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+input, select, textarea { font-family: inherit; }
+
+input, select, textarea {
+  background: rgba(255,255,255,0.04) !important;
+  border-color: rgba(255,255,255,0.1) !important;
+  color: #e2e8f0 !important;
+}
+input::placeholder, textarea::placeholder { color: #475569 !important; }
+input:focus, select:focus, textarea:focus {
+  border-color: rgba(251,191,36,0.5) !important;
+  background: rgba(255,255,255,0.07) !important;
+  outline: none !important;
+}
+select option { background: #0d1a2e; color: #e2e8f0; }
+
+.card-light input,
+.card-light select,
+.card-light textarea {
+  background: #f8fafc !important;
+  border-color: #d0dce8 !important;
+  color: #0f172a !important;
+}
+.card-light input::placeholder,
+.card-light textarea::placeholder { color: #94a3b8 !important; }
+.card-light input:focus,
+.card-light select:focus,
+.card-light textarea:focus {
+  border-color: #1a3a5c !important;
+  background: #fff !important;
+}
+.card-light select option { background: #fff; color: #0f172a; }
+.card-light input[type="date"]::-webkit-datetime-edit,
+.card-light input[type="date"]::-webkit-datetime-edit-text,
+.card-light input[type="date"]::-webkit-datetime-edit-month-field,
+.card-light input[type="date"]::-webkit-datetime-edit-day-field,
+.card-light input[type="date"]::-webkit-datetime-edit-year-field { color:#0f172a; }
+
+button:focus-visible {
+  outline: 2px solid #fbbf24;
+  outline-offset: 2px;
+}
+
+.font-heading { font-family: 'Rajdhani', sans-serif; }
+
+/* Pulsação para alertas de vencimento próximo */
+@keyframes pulse-warn {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(249,168,37,0.6); }
+  50%      { box-shadow: 0 0 0 8px rgba(249,168,37,0); }
+}
+.pulse-warn { animation: pulse-warn 1.8s infinite; }
+
+@keyframes pulse-danger {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(183,28,28,0.6); }
+  50%      { box-shadow: 0 0 0 8px rgba(183,28,28,0); }
+}
+.pulse-danger { animation: pulse-danger 1.4s infinite; }
+
+/* Login split */
+.login-split {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  min-height: calc(100vh - 58px);
+  background: #070f1e;
+}
+.login-left  { display: none; }
+.login-right {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  background: #070f1e;
+}
+
+@media (min-width: 1024px) {
+  .login-split {
+    flex-direction: row;
+    padding: 0;
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+  .login-left {
+    display: flex !important;
+    width: 58%;
+    flex-shrink: 0;
+    position: relative;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 0 48px 64px 64px;
+    overflow: hidden;
+    background: linear-gradient(135deg, #0a1428 0%, #1a3a5c 100%);
+  }
+  .login-right {
+    flex: 1;
+    width: auto;
+    padding: 48px 32px;
+  }
+}
+
+table.tbl-proc {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+table.tbl-proc thead th {
+  position: sticky; top: 0;
+  background: #0a1428;
+  color: #fbbf24;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-align: left;
+  padding: 12px 10px;
+  border-bottom: 2px solid rgba(251,191,36,0.25);
+  z-index: 1;
+}
+table.tbl-proc tbody td {
+  padding: 12px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  font-size: 13px;
+  color: #e2e8f0;
+  vertical-align: middle;
+}
+table.tbl-proc tbody tr:hover { background: rgba(251,191,36,0.04); }
+
+.row-vencido    { background: rgba(183,28,28,0.10); }
+.row-proximo    { background: rgba(249,168,37,0.07); }
+.row-sobrestado { background: rgba(106,27,154,0.07); }
+.row-concluido  { opacity: 0.55; }
