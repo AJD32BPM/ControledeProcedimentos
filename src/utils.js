@@ -113,20 +113,6 @@ export function formatarTelefone(t) {
 }
 
 // ============================================================
-// HASH DE SENHA (browser-compatible bcrypt-like via SubtleCrypto)
-// Para simplicidade no plano admin-only, usamos SHA-256 + salt fixo
-// derivado do email. Em produção considere migrar para bcrypt server-side.
-// ============================================================
-export async function hashSenha(senha, email) {
-  const salt = 'AJD_2026_' + (email || '').toLowerCase();
-  const data = new TextEncoder().encode(salt + ':' + senha);
-  const buf  = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(buf))
-    .map(b => b.toString(16).padStart(2,'0'))
-    .join('');
-}
-
-// ============================================================
 // EXPORT CSV
 // ============================================================
 export function exportarCSV(rows, filename) {
