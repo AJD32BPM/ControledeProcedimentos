@@ -12,9 +12,11 @@ import {
   validarEmail,
   normalizarTelefone,
   formatarTelefone,
-  hashSenha,
   exportarCSV,
 } from './utils';
+
+// Roles autorizados a acessar o app AJD
+const ROLES_AJD = ['admin_ajd', 'comandante'];
 
 // ============================================================
 // ESTILOS BASE (compartilhados)
@@ -123,9 +125,9 @@ function CardKPI({ valor, label, cor, icone, onClick }) {
 }
 
 // ============================================================
-// LOGIN
+// LOGIN (Supabase Auth)
 // ============================================================
-function TelaLogin({ onLogin }) {
+function TelaLogin() {
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
   const [erro, setErro]   = useState('');
@@ -137,21 +139,16 @@ function TelaLogin({ onLogin }) {
     if (!senha) { setErro('Informe a senha.'); return; }
     setLoading(true);
     try {
-      const hash = await hashSenha(senha, email);
-      const { data } = await supabase
-        .from('admins')
-        .select('*')
-        .eq('email', email.toLowerCase())
-        .eq('ativo', true)
-        .single();
-      if (!data || data.senha_hash !== hash) {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password: senha,
+      });
+      if (error) {
         setErro('Email ou senha incorretos.');
-      } else {
-        await supabase.from('admins').update({ ultimo_acesso: new Date().toISOString() }).eq('id', data.id);
-        onLogin(data);
       }
+      // onAuthStateChange no App raiz cuida do resto
     } catch (e) {
-      setErro('Email ou senha incorretos.');
+      setErro('Falha ao entrar. Tente novamente.');
     } finally {
       setLoading(false);
     }
@@ -173,6 +170,77 @@ function TelaLogin({ onLogin }) {
       <button onClick={entrar} disabled={loading} style={btnPrimary}>
         {loading ? 'Entrando...' : 'Entrar'}
       </button>
+    </div>
+  );
+}
+
+// ============================================================
+// TROCA OBRIGATÓRIA DE SENHA
+// ============================================================
+function TelaTrocaSenha({ perfil, onConcluido }) {
+  const [nova, setNova] = useState('');
+  const [conf, setConf] = useState('');
+  const [erro, setErro] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function trocar() {
+    setErro('');
+    if (!nova || nova.length < 6) { setErro('Senha deve ter ao menos 6 caracteres.'); return; }
+    if (nova !== conf) { setErro('As senhas não coincidem.'); return; }
+    setLoading(true);
+    try {
+      const { error: e1 } = await supabase.auth.updateUser({ password: nova });
+      if (e1) { setErro('Erro ao atualizar senha: ' + e1.message); setLoading(false); return; }
+      const { error: e2 } = await supabase.from('perfis').update({ precisa_trocar_senha: false }).eq('id', perfil.id);
+      if (e2) { setErro('Senha alterada, mas falhou ao limpar flag: ' + e2.message); setLoading(false); return; }
+      onConcluido();
+    } catch (e) {
+      setErro('Falha inesperada.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div>
+      <p style={{ color:'#fbbf24', fontSize:12, fontWeight:700, letterSpacing:'0.14em', textTransform:'uppercase', marginBottom:6 }}>
+        Primeiro acesso
+      </p>
+      <p style={{ color:'#cbd5e1', fontSize:13, marginBottom:20 }}>
+        Por segurança, defina uma nova senha pra continuar.
+      </p>
+      <label style={lbl}>Nova senha</label>
+      <input type="password" value={nova} onChange={e => setNova(e.target.value)}
+        placeholder="Mín. 6 caracteres" style={{ ...inp, marginBottom:14 }} autoComplete="new-password" />
+      <label style={lbl}>Confirmar nova senha</label>
+      <input type="password" value={conf} onChange={e => setConf(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && trocar()}
+        placeholder="Repita a senha" style={{ ...inp, marginBottom:6 }} autoComplete="new-password" />
+      {erro && <p style={{ color:'#f87171', fontSize:12, marginBottom:4 }}>{erro}</p>}
+      <button onClick={trocar} disabled={loading} style={btnPrimary}>
+        {loading ? 'Salvando...' : 'Definir nova senha'}
+      </button>
+    </div>
+  );
+}
+
+// ============================================================
+// SEM ACESSO (role não autorizado)
+// ============================================================
+function TelaSemAcesso({ perfil, onSair }) {
+  return (
+    <div style={{ textAlign:'center', padding:'20px 0' }}>
+      <div style={{ fontSize:48, marginBottom:10 }}>🚫</div>
+      <h2 className="font-heading" style={{ color:'#fff', fontSize:22, fontWeight:700, marginBottom:10 }}>
+        Sem permissão
+      </h2>
+      <p style={{ color:'#94a3b8', fontSize:13, marginBottom:6 }}>
+        Você está autenticado, mas seu perfil <strong style={{ color:'#fbbf24' }}>{perfil?.role || '—'}</strong> não tem acesso ao módulo de procedimentos AJD.
+      </p>
+      <p style={{ color:'#64748b', fontSize:12, marginBottom:24 }}>
+        Solicite ao Comandante a alteração do seu papel pra <code>admin_ajd</code>.
+      </p>
+      <button onClick={onSair} style={btnPrimary}>Sair</button>
     </div>
   );
 }
@@ -341,7 +409,6 @@ function ModalProcedimento({ proc, tipos, encarregados, onFechar, onSalvar, admi
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState('');
 
-  // Quando troca o tipo, atualiza o prazo padrão (se ainda for igual ao default anterior)
   function handleTipo(novoTipoId) {
     const tipo = tipos.find(t => t.id === novoTipoId);
     setF(prev => ({ ...prev, tipo_id: novoTipoId, prazo_dias: tipo?.prazo_dias || prev.prazo_dias }));
@@ -374,17 +441,18 @@ function ModalProcedimento({ proc, tipos, encarregados, onFechar, onSalvar, admi
       desfecho: f.desfecho || null,
     };
 
-    let res;
+    let res, savedId = proc?.id || null;
     if (proc?.id) {
-      res = await supabase.from('procedimentos').update(payload).eq('id', proc.id);
+      res = await supabase.from('ajd_procedimentos').update(payload).eq('id', proc.id);
     } else {
-      res = await supabase.from('procedimentos').insert({ ...payload, created_by: adminId });
+      res = await supabase.from('ajd_procedimentos').insert({ ...payload, created_by: adminId }).select('id').single();
+      if (res.data?.id) savedId = res.data.id;
     }
     setSalvando(false);
     if (res.error) { setErro('Erro ao salvar: ' + res.error.message); return; }
 
-    await supabase.from('historico_procedimento').insert({
-      procedimento_id: proc?.id || null,
+    await supabase.from('ajd_historico_procedimento').insert({
+      procedimento_id: savedId,
       admin_id: adminId,
       acao: proc?.id ? 'edicao' : 'criacao',
       detalhes: `Procedimento ${proc?.id ? 'editado' : 'criado'}: ${f.numero}`,
@@ -536,11 +604,11 @@ function TelaProcedimentos({ procedimentos, tipos, encarregados, onRecarregar, a
   const [busca, setBusca] = useState('');
   const [filtroTipo, setFiltroTipo] = useState('');
   const [filtroStatus, setFiltroStatus] = useState('');
-  const [editando, setEditando] = useState(null);  // null=fechado, objeto=editar, {} = novo
+  const [editando, setEditando] = useState(null);
 
   function excluir(p) {
     if (!window.confirm(`Excluir o procedimento Nº ${p.numero}?`)) return;
-    supabase.from('procedimentos').delete().eq('id', p.id).then(({ error }) => {
+    supabase.from('ajd_procedimentos').delete().eq('id', p.id).then(({ error }) => {
       if (error) toast('Erro ao excluir: ' + error.message, 'erro');
       else { toast('Procedimento excluído.', 'ok'); onRecarregar(); }
     });
@@ -556,7 +624,6 @@ function TelaProcedimentos({ procedimentos, tipos, encarregados, onRecarregar, a
     }
     return true;
   }).sort((a, b) => {
-    // Vencidos primeiro, depois próximos, depois andamento, sobrestado, concluído
     const ordem = { vencido:0, proximo_vencimento:1, dentro_prazo:2, sobrestado:3, concluido:4 };
     return ordem[statusCalculado(a)] - ordem[statusCalculado(b)];
   });
@@ -707,8 +774,8 @@ function TelaEncarregados({ encarregados, onRecarregar, toast }) {
       telefone: normalizarTelefone(f.telefone) || null,
     };
     let res;
-    if (editandoId) res = await supabase.from('encarregados').update(payload).eq('id', editandoId);
-    else            res = await supabase.from('encarregados').insert(payload);
+    if (editandoId) res = await supabase.from('ajd_encarregados').update(payload).eq('id', editandoId);
+    else            res = await supabase.from('ajd_encarregados').insert(payload);
     if (res.error) toast('Erro: ' + res.error.message, 'erro');
     else {
       toast(editandoId ? 'Encarregado atualizado.' : 'Encarregado cadastrado.', 'ok');
@@ -726,7 +793,7 @@ function TelaEncarregados({ encarregados, onRecarregar, toast }) {
 
   async function excluir(e) {
     if (!window.confirm(`Excluir o encarregado ${e.nome}?`)) return;
-    const { error } = await supabase.from('encarregados').delete().eq('id', e.id);
+    const { error } = await supabase.from('ajd_encarregados').delete().eq('id', e.id);
     if (error) toast('Erro: ' + error.message, 'erro');
     else { toast('Excluído.', 'ok'); onRecarregar(); }
   }
@@ -805,7 +872,7 @@ function TelaEncarregados({ encarregados, onRecarregar, toast }) {
 // ============================================================
 function TelaTipos({ tipos, onRecarregar, toast }) {
   async function salvar(id, campo, valor) {
-    const { error } = await supabase.from('procedimento_tipos').update({ [campo]: Number(valor) }).eq('id', id);
+    const { error } = await supabase.from('ajd_procedimento_tipos').update({ [campo]: Number(valor) }).eq('id', id);
     if (error) toast('Erro: ' + error.message, 'erro');
     else { toast('Atualizado.', 'ok'); onRecarregar(); }
   }
@@ -850,98 +917,98 @@ function TelaTipos({ tipos, onRecarregar, toast }) {
 }
 
 // ============================================================
-// ADMINISTRADORES (gestão de usuários)
+// ADMINISTRADORES (gestão via Supabase Auth + perfis)
 // ============================================================
 function TelaAdmins({ adminLogado, toast }) {
   const [admins, setAdmins] = useState([]);
-  const [novo, setNovo] = useState({ email:'', nome:'', graduacao:'CAP PM', senha:'' });
 
   const carregar = useCallback(async () => {
-    const { data } = await supabase.from('admins').select('*').order('created_at', { ascending: true });
+    const { data } = await supabase
+      .from('perfis')
+      .select('id, nome, graduacao, role, ativo, email_contato, created_at')
+      .in('role', ROLES_AJD)
+      .order('created_at', { ascending: true });
     setAdmins(data || []);
   }, []);
 
   useEffect(() => { carregar(); }, [carregar]);
 
-  async function criar() {
-    if (!validarEmail(novo.email)) { toast('Email inválido.', 'erro'); return; }
-    if (!novo.nome) { toast('Informe o nome.', 'erro'); return; }
-    if (!novo.senha || novo.senha.length < 6) { toast('Senha deve ter ao menos 6 caracteres.', 'erro'); return; }
-    const hash = await hashSenha(novo.senha, novo.email);
-    const { error } = await supabase.from('admins').insert({
-      email: novo.email.toLowerCase(),
-      nome: novo.nome.toUpperCase(),
-      graduacao: novo.graduacao,
-      senha_hash: hash,
-    });
-    if (error) toast('Erro: ' + error.message, 'erro');
-    else { toast('Administrador criado.', 'ok'); setNovo({ email:'', nome:'', graduacao:'CAP PM', senha:'' }); carregar(); }
+  function aviso(msg) {
+    alert(
+      msg + '\n\n' +
+      'Por segurança, esta ação precisa do dashboard Supabase ' +
+      '(ou da Edge Function admin-ajd-users, que ainda será criada).\n\n' +
+      'Caminho manual:\n' +
+      '1) Authentication → Users → Add user (email + senha)\n' +
+      '2) Table editor → perfis → Insert (id do auth user, nome, graduacao, role=admin_ajd, ativo=true)'
+    );
   }
 
   async function alternarAtivo(a) {
     if (a.id === adminLogado.id) { toast('Você não pode desativar a si mesmo.', 'erro'); return; }
-    const { error } = await supabase.from('admins').update({ ativo: !a.ativo }).eq('id', a.id);
+    const { error } = await supabase.from('perfis').update({ ativo: !a.ativo }).eq('id', a.id);
     if (error) toast('Erro: ' + error.message, 'erro');
     else { toast(a.ativo ? 'Administrador desativado.' : 'Administrador reativado.', 'ok'); carregar(); }
   }
 
-  async function resetarSenha(a) {
-    const nova = window.prompt(`Nova senha para ${a.nome} (mín. 6 caracteres):`);
-    if (!nova || nova.length < 6) return;
-    const hash = await hashSenha(nova, a.email);
-    const { error } = await supabase.from('admins').update({ senha_hash: hash }).eq('id', a.id);
-    if (error) toast('Erro: ' + error.message, 'erro');
-    else toast('Senha redefinida.', 'ok');
-  }
+  const podeGerenciar = adminLogado.role === 'comandante';
 
   return (
     <div>
-      <SectionTitle icone="🔐" titulo="Administradores" sub="Apenas administradores ativos podem acessar o sistema." />
+      <SectionTitle icone="🔐" titulo="Administradores" sub={`${admins.length} cadastrados · papéis admin_ajd e comandante`} />
 
-      <div style={{
-        background:'#0d1a2e', border:'1px solid rgba(255,255,255,0.06)',
-        borderRadius:12, padding:'18px 20px', marginBottom:20,
-      }}>
-        <h3 style={{ color:'#fbbf24', fontSize:11, fontWeight:800, letterSpacing:'0.16em', textTransform:'uppercase', marginBottom:14 }}>
-          Cadastrar novo administrador
-        </h3>
-        <div style={{ display:'grid', gap:12, gridTemplateColumns:'140px 1fr 1.2fr 1fr auto', alignItems:'flex-end' }}>
-          <div>
-            <label style={lbl}>Graduação</label>
-            <select value={novo.graduacao} onChange={e => setNovo({ ...novo, graduacao:e.target.value })} style={inp}>
-              {PATENTES.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={lbl}>Nome</label>
-            <input value={novo.nome} onChange={e => setNovo({ ...novo, nome:e.target.value })} placeholder="NOME COMPLETO" style={inp} />
-          </div>
-          <div>
-            <label style={lbl}>Email</label>
-            <input value={novo.email} onChange={e => setNovo({ ...novo, email:e.target.value })} placeholder="email@instituicao.gov.br" style={inp} />
-          </div>
-          <div>
-            <label style={lbl}>Senha</label>
-            <input type="password" value={novo.senha} onChange={e => setNovo({ ...novo, senha:e.target.value })} placeholder="Mín. 6 caracteres" style={inp} />
-          </div>
-          <button onClick={criar} style={{ ...btnGhost, background:'#fbbf24', color:'#000', borderColor:'#fbbf24' }}>+ Adicionar</button>
+      {podeGerenciar ? (
+        <div style={{
+          background:'#0d1a2e', border:'1px solid rgba(255,255,255,0.06)',
+          borderRadius:12, padding:'18px 20px', marginBottom:20,
+        }}>
+          <h3 style={{ color:'#fbbf24', fontSize:11, fontWeight:800, letterSpacing:'0.16em', textTransform:'uppercase', marginBottom:10 }}>
+            Cadastrar novo administrador
+          </h3>
+          <p style={{ color:'#94a3b8', fontSize:12, marginBottom:14, lineHeight:1.6 }}>
+            Criar usuários no Supabase Auth exige permissão elevada. Use o dashboard, ou aguarde a Edge Function <code>admin-ajd-users</code>.
+          </p>
+          <button onClick={() => aviso('Criar novo administrador.')} style={{ ...btnGhost, background:'#fbbf24', color:'#000', borderColor:'#fbbf24' }}>
+            + Como cadastrar
+          </button>
         </div>
-      </div>
+      ) : (
+        <div style={{
+          background:'rgba(59,130,246,0.08)', border:'1px solid rgba(59,130,246,0.25)',
+          borderRadius:10, padding:'12px 16px', marginBottom:20, color:'#93c5fd', fontSize:12,
+        }}>
+          Apenas o <strong>Comandante</strong> pode gerenciar administradores.
+        </div>
+      )}
 
       <div style={{ background:'#0a1428', border:'1px solid rgba(255,255,255,0.05)', borderRadius:12, overflow:'hidden' }}>
         <table className="tbl-proc">
           <thead>
             <tr>
               <th>Graduação</th><th>Nome</th><th>Email</th>
-              <th>Status</th><th>Último acesso</th><th style={{ textAlign:'right' }}>Ações</th>
+              <th>Papel</th><th>Status</th>
+              {podeGerenciar && <th style={{ textAlign:'right' }}>Ações</th>}
             </tr>
           </thead>
           <tbody>
+            {admins.length === 0 && (
+              <tr><td colSpan={podeGerenciar ? 6 : 5} style={{ textAlign:'center', padding:30, color:'#475569' }}>Nenhum administrador cadastrado.</td></tr>
+            )}
             {admins.map(a => (
               <tr key={a.id} style={{ opacity: a.ativo ? 1 : 0.5 }}>
-                <td style={{ color:'#fbbf24', fontWeight:700 }}>{a.graduacao}</td>
-                <td style={{ color:'#fff' }}>{a.nome}{a.id === adminLogado.id && <span style={{ color:'#22c55e', fontSize:10, marginLeft:6 }}>(você)</span>}</td>
-                <td style={{ fontSize:12 }}>{a.email}</td>
+                <td style={{ color:'#fbbf24', fontWeight:700 }}>{a.graduacao || '—'}</td>
+                <td style={{ color:'#fff' }}>
+                  {a.nome}
+                  {a.id === adminLogado.id && <span style={{ color:'#22c55e', fontSize:10, marginLeft:6 }}>(você)</span>}
+                </td>
+                <td style={{ fontSize:12 }}>{a.email_contato || <span style={{ color:'#475569' }}>—</span>}</td>
+                <td style={{ fontSize:11 }}>
+                  <span style={{
+                    background: a.role === 'comandante' ? 'rgba(251,191,36,0.15)' : 'rgba(59,130,246,0.15)',
+                    color: a.role === 'comandante' ? '#fbbf24' : '#60a5fa',
+                    padding:'3px 8px', borderRadius:10, fontWeight:700, letterSpacing:'0.08em',
+                  }}>{a.role}</span>
+                </td>
                 <td>
                   <span style={{
                     fontSize:10, fontWeight:800, padding:'3px 8px', borderRadius:10, letterSpacing:'0.1em',
@@ -951,16 +1018,15 @@ function TelaAdmins({ adminLogado, toast }) {
                     {a.ativo ? 'ATIVO' : 'INATIVO'}
                   </span>
                 </td>
-                <td style={{ fontSize:11, color:'#94a3b8' }}>
-                  {a.ultimo_acesso ? new Date(a.ultimo_acesso).toLocaleString('pt-BR') : 'Nunca'}
-                </td>
-                <td style={{ textAlign:'right' }}>
-                  <button onClick={() => resetarSenha(a)} style={{ ...btnSm, background:'rgba(59,130,246,0.15)', color:'#60a5fa', marginRight:6 }}>🔑</button>
-                  <button onClick={() => alternarAtivo(a)} style={{ ...btnSm,
-                    background: a.ativo ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.15)',
-                    color: a.ativo ? '#f87171' : '#22c55e',
-                  }}>{a.ativo ? '🚫' : '✓'}</button>
-                </td>
+                {podeGerenciar && (
+                  <td style={{ textAlign:'right' }}>
+                    <button onClick={() => aviso('Resetar senha de ' + a.nome + '.')} style={{ ...btnSm, background:'rgba(59,130,246,0.15)', color:'#60a5fa', marginRight:6 }}>🔑</button>
+                    <button onClick={() => alternarAtivo(a)} style={{ ...btnSm,
+                      background: a.ativo ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.15)',
+                      color: a.ativo ? '#f87171' : '#22c55e',
+                    }}>{a.ativo ? '🚫' : '✓'}</button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -992,14 +1058,14 @@ function TopBar({ admin, onSair }) {
             AJD — Controle de Procedimentos
           </div>
           <div style={{ color:'#475569', fontSize:9, fontWeight:600, letterSpacing:'0.18em', textTransform:'uppercase' }}>
-            Procedimentos Administrativos · v1.0
+            Procedimentos Administrativos · v1.1
           </div>
         </div>
       </div>
       {admin && (
         <div style={{ display:'flex', alignItems:'center', gap:14 }}>
           <div style={{ textAlign:'right' }}>
-            <div style={{ color:'#fff', fontSize:12, fontWeight:700 }}>{admin.graduacao} {admin.nome}</div>
+            <div style={{ color:'#fff', fontSize:12, fontWeight:700 }}>{admin.graduacao || ''} {admin.nome}</div>
             <div style={{ color:'#475569', fontSize:10 }}>{admin.email}</div>
           </div>
           <button onClick={onSair} style={btnGhost}>← Sair</button>
@@ -1043,10 +1109,86 @@ function MenuLateral({ aba, setAba }) {
 }
 
 // ============================================================
+// LAYOUT DA SPLASH DE LOGIN (compartilhado entre TelaLogin / TrocaSenha / SemAcesso)
+// ============================================================
+function SplashLogin({ isDesktop, children, titulo = 'Entrar', sub = 'Acesso restrito a administradores.' }) {
+  return (
+    <div style={{ minHeight:'100vh', background:'#070f1e' }}>
+      <TopBar admin={null} />
+      <div className="login-split" style={{
+        minHeight:'calc(100vh - 58px)',
+        flexDirection: isDesktop ? 'row' : 'column',
+      }}>
+        {isDesktop && (
+          <div className="login-left" style={{
+            display:'flex', flexDirection:'column', justifyContent:'flex-end',
+            width:'58%', flexShrink:0, position:'relative',
+            padding:'0 48px 64px 64px', overflow:'hidden',
+            background:'linear-gradient(135deg, #0a1428 0%, #1a3a5c 100%)',
+          }}>
+            <div style={{ position:'absolute', left:0, top:0, bottom:0, width:3, background:'#fbbf24' }} />
+            <div style={{ position:'relative', zIndex:1 }}>
+              <div style={{
+                width:88, height:88, marginBottom:20,
+                background:'linear-gradient(135deg, #fbbf24, #d97706)',
+                borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
+                fontWeight:900, color:'#0a1428', fontSize:30, letterSpacing:1,
+                boxShadow:'0 12px 32px rgba(0,0,0,0.5)',
+              }}>AJD</div>
+              <p style={{ color:'#fbbf24', fontSize:10, fontWeight:700, letterSpacing:'0.3em', textTransform:'uppercase', margin:'0 0 14px' }}>
+                Assessoria Jurídica · Procedimentos
+              </p>
+              <h1 className="font-heading" style={{ color:'#fff', fontWeight:700, fontSize:64, lineHeight:1, margin:'0 0 10px', letterSpacing:'-1px' }}>
+                Controle de<br/>Procedimentos
+              </h1>
+              <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:18 }}>
+                <div style={{ width:48, height:1, background:'#fbbf24' }} />
+                <span style={{ color:'#94a3b8', fontSize:13, letterSpacing:'0.12em' }}>Administrativos · Disciplinares</span>
+              </div>
+              <p style={{ color:'#cbd5e1', fontSize:16, fontWeight:500, margin:'0 0 8px', maxWidth:420, lineHeight:1.5 }}>
+                Gestão de Averiguações, IPMs, Sindicâncias, Inquéritos e Pareceres Técnicos com controle automático de prazos.
+              </p>
+              <ul style={{ color:'#94a3b8', fontSize:12, lineHeight:1.9, marginTop:18, listStyle:'none', padding:0 }}>
+                <li>✓ Login único (SSO) com o portal de Folgas</li>
+                <li>✓ Alertas visuais de vencimento</li>
+                <li>✓ Notificação automática via WhatsApp</li>
+                <li>✓ Histórico e auditoria</li>
+              </ul>
+            </div>
+          </div>
+        )}
+
+        <div className="login-right" style={{ flex: isDesktop ? 1 : 'initial', width: isDesktop ? 'auto' : '100%' }}>
+          <div style={{ width:'100%', maxWidth:360 }}>
+            <div style={{ marginBottom:32 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
+                <div style={{ width:28, height:1, background:'#fbbf24' }} />
+                <span style={{ color:'#fbbf24', fontSize:9, fontWeight:700, letterSpacing:'0.3em', textTransform:'uppercase' }}>Acesso Restrito</span>
+              </div>
+              <h2 className="font-heading" style={{ color:'#fff', fontWeight:700, fontSize:48, margin:'0 0 8px', lineHeight:1 }}>{titulo}</h2>
+              <p style={{ color:'#475569', fontSize:12, margin:0 }}>{sub}</p>
+            </div>
+            {children}
+            <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:32 }}>
+              <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.04)' }} />
+              <span style={{ fontSize:9, color:'#334155', fontWeight:500, letterSpacing:'0.12em', textTransform:'uppercase' }}>AJD · Sistema Interno</span>
+              <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.04)' }} />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // APP RAIZ
 // ============================================================
 export default function App() {
-  const [admin, setAdmin] = useState(null);
+  const [bootstrapping, setBootstrapping] = useState(true);
+  const [session, setSession] = useState(null);
+  const [perfil, setPerfil] = useState(null);
+  const [perfilCarregando, setPerfilCarregando] = useState(false);
   const [aba, setAba] = useState('dashboard');
   const [procedimentos, setProcedimentos] = useState([]);
   const [tipos, setTipos] = useState([]);
@@ -1062,22 +1204,68 @@ export default function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Sessão
+  // ----- BOOT: SSO bridge + sessão existente -----
   useEffect(() => {
-    try {
-      const s = sessionStorage.getItem('ajd_admin');
-      if (s) setAdmin(JSON.parse(s));
-    } catch {}
+    let hashSession = null;
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    if (hash && hash.includes('access_token')) {
+      const params = new URLSearchParams(hash.replace(/^#/, ''));
+      const access_token = params.get('access_token');
+      const refresh_token = params.get('refresh_token');
+      if (access_token && refresh_token) {
+        hashSession = { access_token, refresh_token };
+      }
+    }
+
+    (async () => {
+      try {
+        if (hashSession) {
+          const { error } = await supabase.auth.setSession(hashSession);
+          // Limpa o hash da URL pra não vazar tokens em logs / refresh
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          if (error) console.warn('SSO bridge falhou:', error.message);
+        }
+        const { data } = await supabase.auth.getSession();
+        setSession(data.session || null);
+      } catch (e) {
+        console.warn('Boot error:', e);
+      } finally {
+        setBootstrapping(false);
+      }
+    })();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+    });
+    return () => { sub.subscription.unsubscribe(); };
   }, []);
 
-  function fazerLogin(a) {
-    sessionStorage.setItem('ajd_admin', JSON.stringify(a));
-    setAdmin(a);
-  }
+  // ----- Carrega perfil quando há sessão -----
+  const carregarPerfil = useCallback(async (uid) => {
+    setPerfilCarregando(true);
+    const { data, error } = await supabase
+      .from('perfis')
+      .select('id, nome, matricula, patente, secao, rg, graduacao, role, ativo, principal, precisa_trocar_senha, email_contato')
+      .eq('id', uid)
+      .maybeSingle();
+    setPerfilCarregando(false);
+    if (error) {
+      console.warn('Erro carregando perfil:', error.message);
+      setPerfil(null);
+      return;
+    }
+    setPerfil(data || null);
+  }, []);
 
-  function sair() {
-    sessionStorage.removeItem('ajd_admin');
-    setAdmin(null);
+  useEffect(() => {
+    if (!session?.user) { setPerfil(null); return; }
+    carregarPerfil(session.user.id);
+  }, [session, carregarPerfil]);
+
+  async function sair() {
+    await supabase.auth.signOut();
+    setSession(null);
+    setPerfil(null);
     setAba('dashboard');
   }
 
@@ -1086,101 +1274,111 @@ export default function App() {
     setTimeout(() => setToastMsg({ msg:'', tipo:'info' }), 3500);
   }
 
-  // Loader de dados
+  // ----- Loader de dados -----
   const carregar = useCallback(async () => {
     const [pRes, tRes, eRes] = await Promise.all([
-      supabase.from('procedimentos').select('*, procedimento_tipos(nome), encarregados(graduacao, nome, telefone)').order('created_at', { ascending: false }),
-      supabase.from('procedimento_tipos').select('*').order('ordem'),
-      supabase.from('encarregados').select('*').order('nome'),
+      supabase
+        .from('ajd_procedimentos')
+        .select('*, tipo:ajd_procedimento_tipos(nome), encarregado:ajd_encarregados(graduacao, nome, telefone)')
+        .order('created_at', { ascending: false }),
+      supabase.from('ajd_procedimento_tipos').select('*').order('ordem'),
+      supabase.from('ajd_encarregados').select('*').order('nome'),
     ]);
     const procs = (pRes.data || []).map(p => ({
       ...p,
-      tipo_nome: p.procedimento_tipos?.nome || p.tipo_id,
-      encarregado_label: p.encarregados ? `${p.encarregados.graduacao} ${p.encarregados.nome}` : null,
-      encarregado_telefone: p.encarregados?.telefone || null,
+      tipo_nome: p.tipo?.nome || p.tipo_id,
+      encarregado_label: p.encarregado ? `${p.encarregado.graduacao} ${p.encarregado.nome}` : null,
+      encarregado_telefone: p.encarregado?.telefone || null,
     }));
     setProcedimentos(procs);
     setTipos(tRes.data || []);
     setEncarregados(eRes.data || []);
   }, []);
 
+  const podeAcessar = perfil && perfil.ativo && ROLES_AJD.includes(perfil.role) && !perfil.precisa_trocar_senha;
+
   useEffect(() => {
-    if (admin) carregar();
-  }, [admin, carregar]);
+    if (podeAcessar) carregar();
+  }, [podeAcessar, carregar]);
 
-  // ============== LOGIN SCREEN ==============
-  if (!admin) {
+  // ============== BOOTING ==============
+  if (bootstrapping) {
     return (
-      <div style={{ minHeight:'100vh', background:'#070f1e' }}>
-        <TopBar admin={null} />
-        <div className="login-split" style={{
-          minHeight:'calc(100vh - 58px)',
-          flexDirection: isDesktop ? 'row' : 'column',
-        }}>
-          {isDesktop && (
-            <div className="login-left" style={{
-              display:'flex', flexDirection:'column', justifyContent:'flex-end',
-              width:'58%', flexShrink:0, position:'relative',
-              padding:'0 48px 64px 64px', overflow:'hidden',
-              background:'linear-gradient(135deg, #0a1428 0%, #1a3a5c 100%)',
-            }}>
-              <div style={{ position:'absolute', left:0, top:0, bottom:0, width:3, background:'#fbbf24' }} />
-              <div style={{ position:'relative', zIndex:1 }}>
-                <div style={{
-                  width:88, height:88, marginBottom:20,
-                  background:'linear-gradient(135deg, #fbbf24, #d97706)',
-                  borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
-                  fontWeight:900, color:'#0a1428', fontSize:30, letterSpacing:1,
-                  boxShadow:'0 12px 32px rgba(0,0,0,0.5)',
-                }}>AJD</div>
-                <p style={{ color:'#fbbf24', fontSize:10, fontWeight:700, letterSpacing:'0.3em', textTransform:'uppercase', margin:'0 0 14px' }}>
-                  Assessoria Jurídica · Procedimentos
-                </p>
-                <h1 className="font-heading" style={{ color:'#fff', fontWeight:700, fontSize:64, lineHeight:1, margin:'0 0 10px', letterSpacing:'-1px' }}>
-                  Controle de<br/>Procedimentos
-                </h1>
-                <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:18 }}>
-                  <div style={{ width:48, height:1, background:'#fbbf24' }} />
-                  <span style={{ color:'#94a3b8', fontSize:13, letterSpacing:'0.12em' }}>Administrativos · Disciplinares</span>
-                </div>
-                <p style={{ color:'#cbd5e1', fontSize:16, fontWeight:500, margin:'0 0 8px', maxWidth:420, lineHeight:1.5 }}>
-                  Gestão de Averiguações, IPMs, Sindicâncias, Inquéritos e Pareceres Técnicos com controle automático de prazos.
-                </p>
-                <ul style={{ color:'#94a3b8', fontSize:12, lineHeight:1.9, marginTop:18, listStyle:'none', padding:0 }}>
-                  <li>✓ Alertas visuais de vencimento</li>
-                  <li>✓ Notificação automática via WhatsApp</li>
-                  <li>✓ Prorrogação conforme legislação</li>
-                  <li>✓ Histórico e auditoria</li>
-                </ul>
-              </div>
-            </div>
-          )}
-
-          <div className="login-right" style={{ flex: isDesktop ? 1 : 'initial', width: isDesktop ? 'auto' : '100%' }}>
-            <div style={{ width:'100%', maxWidth:360 }}>
-              <div style={{ marginBottom:32 }}>
-                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
-                  <div style={{ width:28, height:1, background:'#fbbf24' }} />
-                  <span style={{ color:'#fbbf24', fontSize:9, fontWeight:700, letterSpacing:'0.3em', textTransform:'uppercase' }}>Acesso Restrito</span>
-                </div>
-                <h2 className="font-heading" style={{ color:'#fff', fontWeight:700, fontSize:48, margin:'0 0 8px', lineHeight:1 }}>Entrar</h2>
-                <p style={{ color:'#475569', fontSize:12, margin:0 }}>Acesso restrito a administradores.</p>
-              </div>
-              <TelaLogin onLogin={fazerLogin} />
-              <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:32 }}>
-                <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.04)' }} />
-                <span style={{ fontSize:9, color:'#334155', fontWeight:500, letterSpacing:'0.12em', textTransform:'uppercase' }}>AJD · Sistema Interno</span>
-                <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.04)' }} />
-              </div>
-            </div>
-          </div>
-        </div>
-        <Toast msg={toastMsg.msg} tipo={toastMsg.tipo} />
+      <div style={{
+        minHeight:'100vh', background:'#070f1e',
+        display:'flex', alignItems:'center', justifyContent:'center',
+        color:'#94a3b8', fontSize:13, letterSpacing:'0.12em',
+      }}>
+        Carregando…
       </div>
     );
   }
 
+  // ============== SEM SESSÃO → LOGIN ==============
+  if (!session) {
+    return (
+      <>
+        <SplashLogin isDesktop={isDesktop}>
+          <TelaLogin />
+        </SplashLogin>
+        <Toast msg={toastMsg.msg} tipo={toastMsg.tipo} />
+      </>
+    );
+  }
+
+  // ============== SESSÃO + perfil ainda carregando ==============
+  if (perfilCarregando || (!perfil && session)) {
+    return (
+      <div style={{
+        minHeight:'100vh', background:'#070f1e',
+        display:'flex', alignItems:'center', justifyContent:'center',
+        color:'#94a3b8', fontSize:13, letterSpacing:'0.12em',
+      }}>
+        {perfil === null && !perfilCarregando ? (
+          <SplashLogin isDesktop={isDesktop} titulo="Perfil não encontrado" sub="Seu usuário existe no Auth mas não tem perfil cadastrado.">
+            <p style={{ color:'#94a3b8', fontSize:13, marginBottom:20 }}>
+              Peça ao Comandante pra criar seu perfil na tabela <code>perfis</code> com role <code>admin_ajd</code>.
+            </p>
+            <button onClick={sair} style={btnPrimary}>Sair</button>
+          </SplashLogin>
+        ) : 'Carregando perfil…'}
+      </div>
+    );
+  }
+
+  // ============== TROCA OBRIGATÓRIA DE SENHA ==============
+  if (perfil.precisa_trocar_senha) {
+    return (
+      <>
+        <SplashLogin isDesktop={isDesktop} titulo="Trocar senha" sub="Primeiro acesso — defina uma nova senha.">
+          <TelaTrocaSenha perfil={perfil} onConcluido={() => carregarPerfil(session.user.id)} />
+        </SplashLogin>
+        <Toast msg={toastMsg.msg} tipo={toastMsg.tipo} />
+      </>
+    );
+  }
+
+  // ============== ROLE NÃO AUTORIZADO ==============
+  if (!ROLES_AJD.includes(perfil.role) || !perfil.ativo) {
+    return (
+      <>
+        <SplashLogin isDesktop={isDesktop} titulo="Sem acesso" sub="Seu perfil não permite uso deste módulo.">
+          <TelaSemAcesso perfil={perfil} onSair={sair} />
+        </SplashLogin>
+        <Toast msg={toastMsg.msg} tipo={toastMsg.tipo} />
+      </>
+    );
+  }
+
   // ============== APP LOGADO ==============
+  const admin = {
+    id: perfil.id,
+    nome: perfil.nome,
+    graduacao: perfil.graduacao || perfil.patente || '',
+    email: session.user.email || perfil.email_contato || '',
+    role: perfil.role,
+  };
+
   return (
     <div style={{ minHeight:'100vh', background:'#070f1e' }}>
       <TopBar admin={admin} onSair={sair} />
