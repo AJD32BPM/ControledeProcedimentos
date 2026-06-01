@@ -128,13 +128,15 @@ function CardKPI({ valor, label, cor, icone, onClick }) {
 // LOGIN (Supabase Auth)
 // ============================================================
 function TelaLogin() {
+  const [modo, setModo] = useState('login'); // 'login' | 'recuperar'
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
   const [erro, setErro]   = useState('');
+  const [msg, setMsg]     = useState('');
   const [loading, setLoading] = useState(false);
 
   async function entrar() {
-    setErro('');
+    setErro(''); setMsg('');
     if (!validarEmail(email)) { setErro('Email inválido.'); return; }
     if (!senha) { setErro('Informe a senha.'); return; }
     setLoading(true);
@@ -154,6 +156,52 @@ function TelaLogin() {
     }
   }
 
+  async function enviarLinkRecuperacao() {
+    setErro(''); setMsg('');
+    if (!validarEmail(email)) { setErro('Email inválido.'); return; }
+    setLoading(true);
+    try {
+      const redirectTo = (typeof window !== 'undefined' ? window.location.origin : '') + '/';
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo });
+      if (error) {
+        setErro('Falha ao enviar email: ' + error.message);
+      } else {
+        setMsg('Se o email estiver cadastrado, um link de recuperação foi enviado. Confere a caixa de entrada (e o spam).');
+      }
+    } catch (e) {
+      setErro('Falha ao enviar email.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (modo === 'recuperar') {
+    return (
+      <div>
+        <p style={{ color:'#475569', fontSize:12, marginBottom:20 }}>
+          Informe seu email cadastrado e enviaremos um link pra você definir uma nova senha.
+        </p>
+        <label style={lbl}>Email</label>
+        <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && enviarLinkRecuperacao()}
+          placeholder="seu.email@instituicao.gov.br" style={{ ...inp, marginBottom:6 }} autoComplete="username" />
+        {erro && <p style={{ color:'#f87171', fontSize:12, marginBottom:4 }}>{erro}</p>}
+        {msg  && <p style={{ color:'#86efac', fontSize:12, marginBottom:4 }}>{msg}</p>}
+        <button onClick={enviarLinkRecuperacao} disabled={loading} style={btnPrimary}>
+          {loading ? 'Enviando...' : 'Enviar link de recuperação'}
+        </button>
+        <button
+          onClick={() => { setModo('login'); setErro(''); setMsg(''); }}
+          style={{
+            background:'transparent', border:'none', color:'#94a3b8',
+            fontSize:12, cursor:'pointer', marginTop:14, padding:0, textDecoration:'underline',
+          }}>
+          ← Voltar pro login
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div>
       <p style={{ color:'#475569', fontSize:12, marginBottom:20 }}>
@@ -169,6 +217,14 @@ function TelaLogin() {
       {erro && <p style={{ color:'#f87171', fontSize:12, marginBottom:4 }}>{erro}</p>}
       <button onClick={entrar} disabled={loading} style={btnPrimary}>
         {loading ? 'Entrando...' : 'Entrar'}
+      </button>
+      <button
+        onClick={() => { setModo('recuperar'); setErro(''); setSenha(''); }}
+        style={{
+          background:'transparent', border:'none', color:'#94a3b8',
+          fontSize:12, cursor:'pointer', marginTop:14, padding:0, textDecoration:'underline',
+        }}>
+        Esqueci minha senha
       </button>
     </div>
   );
@@ -1189,6 +1245,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [perfil, setPerfil] = useState(null);
   const [perfilCarregando, setPerfilCarregando] = useState(false);
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const [aba, setAba] = useState('dashboard');
   const [procedimentos, setProcedimentos] = useState([]);
   const [tipos, setTipos] = useState([]);
@@ -1207,15 +1264,21 @@ export default function App() {
   // ----- BOOT: SSO bridge + sessão existente -----
   useEffect(() => {
     let hashSession = null;
+    let isRecovery = false;
     const hash = typeof window !== 'undefined' ? window.location.hash : '';
     if (hash && hash.includes('access_token')) {
       const params = new URLSearchParams(hash.replace(/^#/, ''));
       const access_token = params.get('access_token');
       const refresh_token = params.get('refresh_token');
+      const type = params.get('type');
       if (access_token && refresh_token) {
         hashSession = { access_token, refresh_token };
       }
+      if (type === 'recovery') {
+        isRecovery = true;
+      }
     }
+    if (isRecovery) setRecoveryMode(true);
 
     (async () => {
       try {
@@ -1346,12 +1409,22 @@ export default function App() {
     );
   }
 
-  // ============== TROCA OBRIGATÓRIA DE SENHA ==============
-  if (perfil.precisa_trocar_senha) {
+  // ============== TROCA DE SENHA (primeiro acesso OU recuperação por email) ==============
+  if (perfil.precisa_trocar_senha || recoveryMode) {
+    const titulo = recoveryMode ? 'Definir nova senha' : 'Trocar senha';
+    const sub    = recoveryMode
+      ? 'Você chegou aqui pelo link de recuperação. Defina sua nova senha.'
+      : 'Primeiro acesso — defina uma nova senha.';
     return (
       <>
-        <SplashLogin isDesktop={isDesktop} titulo="Trocar senha" sub="Primeiro acesso — defina uma nova senha.">
-          <TelaTrocaSenha perfil={perfil} onConcluido={() => carregarPerfil(session.user.id)} />
+        <SplashLogin isDesktop={isDesktop} titulo={titulo} sub={sub}>
+          <TelaTrocaSenha
+            perfil={perfil}
+            onConcluido={() => {
+              setRecoveryMode(false);
+              carregarPerfil(session.user.id);
+            }}
+          />
         </SplashLogin>
         <Toast msg={toastMsg.msg} tipo={toastMsg.tipo} />
       </>
